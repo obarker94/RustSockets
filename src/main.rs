@@ -23,15 +23,22 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWs {
 
 async fn index(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     let resp = ws::start(MyWs {}, &req, stream);
-    println!("{:?}", resp);
     resp
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| App::new().route("/", web::get().to(index)))
-        .bind(("127.0.0.1", 8080))?
-        .run()
-        .await
+    HttpServer::new(|| {
+        let cors = actix_cors::Cors::default()
+            .allow_any_origin()
+            .allow_any_method()
+            .allow_any_header()
+            .max_age(3600);
+
+        App::new().wrap(cors).route("/ws/", web::get().to(index))
+    })
+    .bind(("127.0.0.1", 8080))?
+    .run()
+    .await
 }
 
