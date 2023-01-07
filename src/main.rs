@@ -37,8 +37,7 @@ async fn main() -> std::io::Result<()> {
 
         App::new().wrap(cors).route("/ws/", web::get().to(index))
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind(("127.0.0.1", 2727))?
     .run()
     .await
 }
-
