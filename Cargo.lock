@@ -857,6 +857,7 @@ dependencies = [
  "actix",
  "actix-web",
  "actix-web-actors",
+ "rand",
  "uuid",
 ]
 
