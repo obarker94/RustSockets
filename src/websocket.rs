@@ -98,11 +98,14 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
                 ctx.stop();
             }
             Ok(ws::Message::Nop) => (),
-            Ok(Text(s)) => self.lobby_addr.do_send(ClientActorMessage {
-                id: self.id,
-                msg: s.to_string(),
-                room_id: self.room,
-            }),
+            Ok(Text(s)) => {
+                println!("Text: {:?}, Room: {:?}", s, self.room);
+                self.lobby_addr.do_send(ClientActorMessage {
+                    id: self.id,
+                    msg: s.to_string(),
+                    room_id: self.room,
+                })
+            }
             Err(e) => panic!("Error: {:?}", e),
         }
     }
