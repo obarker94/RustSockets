@@ -1,12 +1,22 @@
-use actix_web::{web, App, HttpServer};
-use websocket::websocket_router;
-mod rooms;
+mod lobby;
 mod websocket;
+use lobby::Lobby;
+mod messages;
+mod start_connection;
+use actix::Actor;
+use start_connection::start_connection as start_connection_route;
 
+use actix_web::{App, HttpServer};
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| App::new().route("/ws/", web::get().to(websocket_router)))
-        .bind(("127.0.0.1", 8080))?
-        .run()
-        .await
+    let chat_server = Lobby::default().start(); //create and spin up a lobby
+
+    HttpServer::new(move || {
+        App::new()
+            .service(start_connection_route) //register our route. rename with "as" import or naming conflict
+            .data(chat_server.clone()) //register the lobby
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
 }
