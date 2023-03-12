@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener},
     sync::{Arc, Mutex},
     thread::spawn,
 };
@@ -8,16 +8,13 @@ use std::{
 use tungstenite::{
     accept_hdr,
     handshake::server::{Request, Response},
-    WebSocket,
 };
 
 fn main() {
     let server = TcpListener::bind("127.0.0.1:3012").unwrap();
 
-    // create an Arc<Mutex<HashMap>> of lobbies with a key of the lobby name and a value of connected clients
     let lobbies: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    // let lobbies: Arc<Mutex<HashMap<String, >>> = Arc::new(Mutex::new(HashMap::new()));
 
     for stream in server.incoming() {
         let lobbies_clone = Arc::clone(&lobbies);
@@ -27,7 +24,6 @@ fn main() {
             let callback = |req: &Request, response: Response| {
                 println!("Recieved - Ws Handshake @ path: {}", req.uri().path());
 
-                // add lobby name to list and increment connected clients by 1
                 lobby_name = req.uri().path().to_string();
 
                 Ok(response)
@@ -41,10 +37,11 @@ fn main() {
 
                     match peer_addr {
                         Ok(peer_addr) => {
+                            let clone_name = lobby_name.clone();
                             lobbies_clone
                                 .lock()
                                 .unwrap()
-                                .entry(lobby_name)
+                                .entry(clone_name)
                                 .or_insert_with(Vec::new)
                                 .push(peer_addr);
 
@@ -55,17 +52,20 @@ fn main() {
                                 println!("Lobby list {:?}", lobbies_clone.lock().unwrap());
                                 match msg {
                                     Ok(msg) => {
-                                        if msg.is_close() {
-                                            println!("Client disconnected @ {}", peer_addr);
-                                        }
-
                                         if msg.is_binary() || msg.is_text() {
                                             websocket.write_message(msg).unwrap();
                                         }
-                                        // if client disconnected remove them from the lobby
                                     }
                                     Err(_) => {
                                         println!("Client disconnected @ {}", peer_addr);
+                                        let mut lobbies = lobbies_clone.lock().unwrap();
+                                        if let Some(connections) = lobbies.get_mut(&lobby_name) {
+                                            connections.retain(|&x| x != peer_addr);
+                                            if connections.is_empty() {
+                                                lobbies.remove(&lobby_name);
+                                            }
+                                        }
+                                        println!("Lobby list {:?}", *lobbies);
                                         break;
                                     }
                                 }
