@@ -1,6 +1,7 @@
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::TcpListener,
+    sync::broadcast,
 };
 
 #[tokio::main]
@@ -11,10 +12,16 @@ async fn main() {
     // unwrap() will panic if it cannot bind - i.e. the port is aleady in use.
     let listener = TcpListener::bind("127.0.0.1:1338").await.unwrap();
 
+    // create a communication channel to send messages between clients and the server.
+    let (tx, _rx) = broadcast::channel(10);
+
     loop {
         // we destructure the socket and address from the listener after the connection is accepted.
         // the connection may not be accepted if the listener is not ready to accept connections.
-        let (mut socket, _addr) = listener.accept().await.unwrap();
+        let (mut socket, addr) = listener.accept().await.unwrap();
+
+        let tx = tx.clone();
+        let mut rx = tx.subscribe();
 
         tokio::spawn(async move {
             // split the socket into a reader and writer.
@@ -24,19 +31,26 @@ async fn main() {
             let mut reader = BufReader::new(reader);
             let mut line = String::new();
 
-            println!("Connection established! {}", _addr);
+            println!("Connection established! {}", addr);
 
             loop {
-                let bytes_read = reader.read_line(&mut line).await.unwrap();
-                if bytes_read == 0 {
+                tokio::select! {
+                result = reader.read_line(&mut line) => {
+
+                if result.unwrap() == 0 {
                     break;
                 }
-
-                // we write the whole buffer to the socket and unwrap the result. it could panic if the socket is not ready to write.
-                //
-                // i.e. outgoing
-                writer.write_all(line.as_bytes()).await.unwrap();
+                tx.send((line.clone(), addr)).unwrap();
                 line.clear();
+                }
+                result = rx.recv() => {
+                    let (msg, other_addr) = result.unwrap();
+
+                    if addr != other_addr {
+                        writer.write_all(msg.as_bytes()).await.unwrap();
+                    }
+                }
+                }
             }
         });
     }
