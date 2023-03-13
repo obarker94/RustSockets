@@ -1,5 +1,10 @@
 use futures::SinkExt;
-use std::{collections::HashSet, io::Error, net::SocketAddr, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    io::Error,
+    net::SocketAddr,
+    sync::Arc,
+};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{broadcast, Mutex},
@@ -15,7 +20,11 @@ async fn main() -> Result<(), Error> {
     let listener = try_socket.expect("Failed to bind");
 
     // Create a Mutex-protected HashSet to store the connections
-    let connections: Arc<Mutex<HashSet<SocketAddr>>> = Arc::new(Mutex::new(HashSet::new()));
+    // let connections: Arc<Mutex<HashSet<SocketAddr>>> = Arc::new(Mutex::new(HashSet::new()));
+
+    // Create a Mutex-protected HashMap to store a vector of connections against a lobby name
+    let connections: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         match listener.accept().await {
@@ -39,7 +48,7 @@ async fn handle_connection(
     stream: TcpStream,
     tx: broadcast::Sender<String>,
     mut rx: broadcast::Receiver<String>,
-    connections: Arc<Mutex<HashSet<SocketAddr>>>,
+    connections: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>>,
 ) {
     // get the peer address
     let addr = stream
@@ -54,10 +63,16 @@ async fn handle_connection(
     let path = path.trim_start_matches("/");
     println!("Path: {}", path);
 
-    // add the peer address to the connections
+    // add the lobby (path) to the connections if it doesnt exist
     {
         let mut connections = connections.lock().await;
-        connections.insert(addr);
+        if !connections.contains_key(path) {
+            connections.insert(path.to_string(), Vec::new());
+        }
+        connections
+            .get_mut(path)
+            .expect("Incorrect lobby was created or not found")
+            .push(addr);
         println!("Connection established: {} - List: {:?}", addr, connections);
     }
 
@@ -90,10 +105,27 @@ async fn handle_connection(
                 Ok(_) => {}
                 Err(e) => {
                     println!("Error sending message to {}: {}", addr, e);
-                    // remove the peer address from the connections when the stream is closed
+
+                    // remove the peer address from the vector of connections of the connected
+                    // lobby when the stream is closed
                     let mut connections = connections.lock().await;
-                    connections.remove(&addr);
+                    let lobby = connections
+                        .iter()
+                        .find(|(_, v)| v.contains(&addr))
+                        .expect("Lobby not found")
+                        .0
+                        .to_string();
+                    connections
+                        .get_mut(&lobby)
+                        .expect("Incorrect lobby was created or not found")
+                        .retain(|&x| x != addr);
+
+                    // if no connections are in lobby then remove the lobby
+                    if connections.get(&lobby).unwrap().len() == 0 {
+                        connections.remove(&lobby);
+                    }
                     println!("Connections: {:?}", connections);
+
                     break;
                 }
             }
