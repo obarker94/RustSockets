@@ -1,86 +1,63 @@
-use std::{
-    collections::HashMap,
-    net::{SocketAddr, TcpListener},
-    sync::{Arc, Mutex},
-    thread::spawn,
+// rewrite with tokio tungstenite
+
+use futures::SinkExt;
+use std::io::Error;
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::broadcast,
 };
 
-use tungstenite::{
-    accept_hdr,
-    handshake::server::{Request, Response},
-};
+use futures_util::StreamExt;
 
-fn main() {
-    let server = TcpListener::bind("127.0.0.1:3012").unwrap();
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let try_socket = TcpListener::bind("127.0.0.1:8383").await;
+    let listener = try_socket.expect("Failed to bind");
 
-    let lobbies: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let (tx, _rx) = broadcast::channel::<String>(10);
 
-    for stream in server.incoming() {
-        let lobbies_clone = Arc::clone(&lobbies);
-        spawn(move || {
-            let mut lobby_name = String::new();
-
-            let callback = |req: &Request, response: Response| {
-                println!("Recieved - Ws Handshake @ path: {}", req.uri().path());
-
-                lobby_name = req.uri().path().to_string();
-
-                Ok(response)
-            };
-
-            let websocket = accept_hdr(stream.unwrap(), callback);
-
-            match websocket {
-                Ok(mut websocket) => {
-                    let peer_addr = websocket.get_mut().peer_addr();
-
-                    match peer_addr {
-                        Ok(peer_addr) => {
-                            let clone_name = lobby_name.clone();
-                            lobbies_clone
-                                .lock()
-                                .unwrap()
-                                .entry(clone_name)
-                                .or_insert_with(Vec::new)
-                                .push(peer_addr);
-
-                            println!("Client connected @ {}", peer_addr);
-
-                            loop {
-                                let msg = websocket.read_message();
-                                println!("Lobby list {:?}", lobbies_clone.lock().unwrap());
-                                match msg {
-                                    Ok(msg) => {
-                                        if msg.is_binary() || msg.is_text() {
-                                            websocket.write_message(msg).unwrap();
-                                        }
-                                    }
-                                    Err(_) => {
-                                        println!("Client disconnected @ {}", peer_addr);
-                                        let mut lobbies = lobbies_clone.lock().unwrap();
-                                        if let Some(connections) = lobbies.get_mut(&lobby_name) {
-                                            connections.retain(|&x| x != peer_addr);
-                                            if connections.is_empty() {
-                                                lobbies.remove(&lobby_name);
-                                            }
-                                        }
-                                        println!("Lobby list {:?}", *lobbies);
-                                        break;
-                                    }
-                                }
-
-                                // if client disconnected remove them from the lobby
-                            }
-                        }
-                        Err(_) => {
-                            println!("Failed to get peer address");
-                            return;
-                        }
-                    };
-                }
-                Err(_) => println!("Websocket handshake failed"),
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => {
+                tokio::spawn(handle_connection(stream, tx.clone(), tx.subscribe()));
             }
-        });
+            Err(e) => {
+                println!("failed to accept connection: {}", e);
+            }
+        }
     }
+}
+
+async fn handle_connection(
+    stream: TcpStream,
+    tx: broadcast::Sender<String>,
+    mut rx: broadcast::Receiver<String>,
+) {
+    let addr = stream
+        .peer_addr()
+        .expect("connected streams should have a peer address");
+
+    let ws_stream = tokio_tungstenite::accept_async(stream)
+        .await
+        .expect("Error during the websocket handshake occurred");
+
+    let (mut write, mut read) = ws_stream.split();
+
+    // send message to broadcast channel
+    tokio::spawn(async move {
+        while let Some(msg) = read.next().await {
+            let msg = msg.expect("Error during reading from websocket");
+            tx.send(msg.to_string()).unwrap();
+        }
+    });
+
+    // read from broadcast channel and send to client
+    tokio::spawn(async move {
+        while let Ok(msg) = rx.recv().await {
+            let msg = tokio_tungstenite::tungstenite::Message::Text(msg.to_string());
+            println!("Sending message {} to {}", msg, addr);
+            write.send(msg).await.unwrap();
+            // want to write here to socket but write doesnt have any send methods?
+        }
+    });
 }
