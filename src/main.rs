@@ -46,6 +46,14 @@ async fn handle_connection(
         .peer_addr()
         .expect("connected streams should have a peer address");
 
+    // get the lobby name from the url
+    let mut buf = [0; 1024];
+    let n = stream.peek(&mut buf).await.unwrap();
+    let path = String::from_utf8_lossy(&buf[..n]);
+    let path = path.split(" ").nth(1).unwrap();
+    let path = path.trim_start_matches("/");
+    println!("Path: {}", path);
+
     // add the peer address to the connections
     {
         let mut connections = connections.lock().await;
